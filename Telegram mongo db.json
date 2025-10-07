@@ -1,0 +1,1156 @@
+{
+  "name": "Telegram mongo db",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "767d5771-0f7b-4cff-8522-a9f6c906cd45",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1568,
+        -176
+      ],
+      "webhookId": "telegram-eval-v2-final",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "TRIGGER 1: Escucha mensajes de usuarios en Telegram"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "id": "9162f9a5-40dc-473a-b8c9-b1c13a804b1e",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1584,
+        -640
+      ],
+      "notes": "TRIGGER 2: Dispara evaluaciones automáticas cada día"
+    },
+    {
+      "parameters": {
+        "collection": "users",
+        "options": {},
+        "query": "={{ JSON.stringify({ activeEvaluations: true }) }}"
+      },
+      "id": "c4ea0c5e-28eb-4ac0-93e8-baa49c96b5dc",
+      "name": "MongoDB Get Active Users",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        -1360,
+        -640
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Obtiene lista de usuarios para evaluación automática"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const userId = $input.item.json.userId;\nconst chatId = $input.item.json.chatId;\nconst username = $input.item.json.username || 'Usuario';\n\nreturn {\n  json: {\n    chatId: chatId,\n    userId: userId,\n    username: username,\n    action: 'start_evaluation',\n    automated: true,\n    message: `¡Hola ${username}! 👋\\n\\nEs momento de tu evaluación periódica de desempeño.\\n\\nVoy a hacerte 5 preguntas. Por favor responde con un número del 1 al 5.\\n\\n📝 Pregunta 1/5:\\n¿Qué tan satisfecho estás con tu nivel de productividad? (1=Muy insatisfecho, 5=Muy satisfecho)`\n  }\n};"
+      },
+      "id": "36837d0c-a738-4006-8669-c188eb7605a2",
+      "name": "Code Prepare Auto Eval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1136,
+        -640
+      ],
+      "notes": "Prepara mensaje de inicio automático"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ✅ CORRECCIÓN 2: Router con detección de sesión activa para validar respuestas\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json;\n  \n  if (data.automated) {\n    results.push({ json: data });\n    continue;\n  }\n  \n  const chatId = data.message?.chat?.id || data.chatId;\n  const userId = data.message?.from?.id || data.userId;\n  const username = data.message?.from?.username || data.username || 'Usuario';\n  const messageText = (data.message?.text || '').trim();\n  \n  let action = 'unknown';\n  let payload = {};\n  \n  // Comandos prioritarios (siempre se procesan)\n  if (messageText === '/start') {\n    action = 'start_evaluation';\n    payload = {\n      chatId,\n      userId,\n      username,\n      action,\n      automated: false,\n      message: `¡Bienvenido ${username}! 👋\\n\\nVoy a hacerte 5 preguntas sobre tu desempeño.\\nPor favor responde con un número del 1 al 5.\\n\\n📝 Pregunta 1/5:\\n¿Qué tan satisfecho estás con tu nivel de productividad? (1=Muy insatisfecho, 5=Muy satisfecho)`\n    };\n  } else if (messageText === '/resultados') {\n    action = 'show_results';\n    payload = { chatId, userId, username, action };\n  } else if (/^[1-5]$/.test(messageText)) {\n    // Respuesta numérica 1-5\n    action = 'save_answer';\n    payload = {\n      chatId,\n      userId,\n      username,\n      action,\n      answer: parseInt(messageText),\n      timestamp: new Date().toISOString(),\n      needsSessionCheck: true  // ✅ Marcar para validación posterior\n    };\n  } else {\n    // ✅ NUEVO: Para cualquier otro mensaje, enviar a validación de sesión\n    // Si tiene sesión activa → error \"responde 1-5\"\n    // Si NO tiene sesión → help normal\n    action = 'check_session_for_invalid';\n    payload = {\n      chatId,\n      userId,\n      username,\n      action,\n      originalMessage: messageText\n    };\n  }\n  \n  results.push({ json: payload });\n}\n\nreturn results;"
+      },
+      "id": "e436c2ed-005c-4f5a-9a87-a0fb3e4b2000",
+      "name": "Code Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1344,
+        -176
+      ],
+      "notes": "✅ CORREGIDO: Detecta sesión activa para validar respuestas inválidas"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "start_evaluation",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "4fb8fc16-9dea-4f9a-801d-c693b685fc3c"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "start"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "save_answer",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "722dd88a-ba99-4513-811c-9f5afcab1f35"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "answer"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "show_results",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "213a0d08-0133-4734-8154-1a911f34f7fc"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "results"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "check_session_for_invalid",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "69fc413c-2c78-4753-8a9c-e4dc3dcd42e3"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "check_invalid"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": 3
+        }
+      },
+      "id": "84ecede4-789d-4ba2-bb4a-5f1615b6e478",
+      "name": "Switch Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        -1040,
+        -208
+      ],
+      "notes": "✅ CORREGIDO: 5 salidas (0=start, 1=answer, 2=results, 3=fallback, 4=check_invalid)"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "  const data = $input.item.json;\n\n  return {\n    json: {\n      userId: parseInt(data.userId),\n      chatId: parseInt(data.chatId),\n      username: data.username,\n      currentQuestion: 1,\n      answers: [],\n      questions: [\n        { id: 1, category: 'productividad', text: '¿Qué tan satisfecho estás con tu nivel de productividad?' },\n        { id: 2, category: 'comunicacion', text: '¿Cómo calificas la comunicación con tu equipo?' },\n        { id: 3, category: 'objetivos', text: '¿En qué medida sientes que cumples tus objetivos?' },\n        { id: 4, category: 'crecimiento', text: '¿Qué tan satisfecho estás con las oportunidades de crecimiento?' },\n        { id: 5, category: 'balance', text: '¿Cómo evalúas tu balance trabajo-vida personal?' }\n      ],\n      startedAt: new Date().toISOString(),\n      status: 'active',\n      automated: data.automated || false\n    }\n  };"
+      },
+      "id": "b96b3f53-e19d-4570-98d8-d92dd57dc48c",
+      "name": "Code Prepare Session Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -816,
+        -560
+      ],
+      "notes": "✅ NUEVO: Prepara datos estructurados para MongoDB"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "collection": "evaluation_sessions",
+        "fields": "=  userId,chatId,username,currentQuestion,answers,questions,startedAt,status,automated",
+        "options": {}
+      },
+      "id": "6247db33-14d9-4081-a9af-63902148cad3",
+      "name": "MongoDB Create Session",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        -480,
+        -560
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "✅ CORREGIDO: Usa JSON.stringify para insertar correctamente"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=={{ $('Switch Router').item.json.message }}",
+        "additionalFields": {}
+      },
+      "id": "b678e819-2d31-4d3f-a103-734638f733f2",
+      "name": "Telegram Send Start",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -256,
+        -560
+      ],
+      "webhookId": "4819c292-6f3e-4acc-b4bd-5245b17d6833",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "Envía mensaje inicial con primera pregunta"
+    },
+    {
+      "parameters": {
+        "collection": "evaluation_sessions",
+        "options": {
+          "limit": 1,
+          "sort": "{ \"startedAt\": -1 }"
+        },
+        "query": "={{ JSON.stringify({ userId: $json.userId, status: 'active' }) }}"
+      },
+      "id": "2280ca2a-44e5-4bb7-84d9-88abd3c55271",
+      "name": "MongoDB Get Session",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        -640,
+        -208
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Obtiene sesión activa del usuario"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "90a6948a-e8ce-4292-af7e-9568a32b6634",
+              "leftValue": "={{ $json.noSession }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "3196bf59-996b-425e-9a6c-b8a57bb66770",
+      "name": "IF No Session Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -208,
+        -208
+      ],
+      "notes": "✅ NUEVO: Verifica si Code Process Answer detectó falta de sesión"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=={{ $json.nextQuestionText }}",
+        "additionalFields": {}
+      },
+      "id": "2f32c79f-507d-4283-90b1-9d79a8839ba4",
+      "name": "Telegram Error No Session Answer",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        352,
+        48
+      ],
+      "webhookId": "79c86349-4461-49c2-9a7b-6126f431b2d9",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "✅ NUEVO: Envía error cuando usuario responde 1-5 sin sesión"
+    },
+    {
+      "parameters": {
+        "operation": "findOneAndUpdate",
+        "collection": "evaluation_sessions",
+        "updateKey": "{ \"_id\": \"{{ $json.sessionId }}\" }",
+        "fields": "={{ {\n  \"$push\": {\n    \"answers\": {\n      \"questionId\": $json.currentQuestion,\n      \"answer\": $json.answer,\n      \"timestamp\": $json.timestamp\n    }\n  },\n  \"$set\": {\n    \"currentQuestion\": $json.nextQuestion\n  }\n} }}\n",
+        "options": {}
+      },
+      "id": "51c57291-99b0-4851-a8dd-00e8201f3918",
+      "name": "MongoDB Save Answer",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        320,
+        -272
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Guarda respuesta y actualiza pregunta"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0e4a6aba-b834-49cc-bec3-62031a629b7a",
+              "leftValue": "={{ $json.isComplete }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "cc0dcf80-140a-4645-b0b9-34ad07c44e21",
+      "name": "IF Evaluation Complete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        544,
+        -272
+      ],
+      "notes": "TRUE=scoring, FALSE=siguiente pregunta"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=🌟 ¡Excelente desempeño! Muestras un alto nivel de satisfacción y cumplimiento en todas las áreas evaluadas. Sigue así y continúa siendo un ejemplo para el equipo",
+        "additionalFields": {}
+      },
+      "id": "66ccdbb3-c53d-4d06-bc30-12eaf2c86152",
+      "name": "Telegram Next Question",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1232,
+        -256
+      ],
+      "webhookId": "f9be07b8-4734-4a04-abae-d80a5e9d93dc",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "Envía siguiente pregunta (2-5)"
+    },
+    {
+      "parameters": {
+        "collection": "evaluation_sessions",
+        "options": {
+          "limit": 1,
+          "sort": "{ \"startedAt\": -1 }"
+        },
+        "query": "={{ JSON.stringify({ userId: $json.userId, status: 'active' }) }}"
+      },
+      "id": "0f40fae5-50ef-4368-8c0e-0b6c0bcb0ac3",
+      "name": "MongoDB Get Complete Session",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        -544
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Obtiene sesión completa para scoring"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst session = item.json.documents?.[0];\n\n// Log de debug\nconsole.log('Session encontrada:', session ? 'Sí' : 'No');\nconsole.log('Cantidad de respuestas:', session?.answers?.length || 0);\n\n// Si no hay sesión o no tiene respuestas\nif (!session || !session.answers) {\n  return {\n    json: {\n      error: true,\n      chatId: $('IF Evaluation Complete').item.json.chatId,\n      message: 'Error: No se encontró la sesión de evaluación'\n    }\n  };\n}\n\n// Si no tiene 5 respuestas\nif (session.answers.length !== 5) {\n  return {\n    json: {\n      error: true,\n      chatId: session.chatId,\n      userId: session.userId,\n      message: `Error: La evaluación está incompleta (${session.answers.length}/5 respuestas). Por favor, inicia una nueva con /start`\n    }\n  };\n}\n\nconst answers = session.answers;\nconst scores = answers.map(a => a.answer);\nconst totalScore = scores.reduce((sum, score) => sum + score, 0);\nconst averageScore = totalScore / scores.length;\nconst percentage = (totalScore / 25) * 100;\n\nlet performanceLevel = '';\nlet feedback = '';\n\nif (percentage >= 80) {\n  performanceLevel = 'Excelente';\n  feedback = '🌟 ¡Excelente desempeño! Muestras un alto nivel de satisfacción y cumplimiento en todas las áreas evaluadas. Sigue así y continúa siendo un ejemplo para el equipo.';\n} else if (percentage >= 60) {\n  performanceLevel = 'Bueno';\n  feedback = '👍 Buen desempeño general. Hay áreas sólidas, pero también oportunidades de mejora. Te recomendamos enfocarte en las categorías con puntajes más bajos para alcanzar un nivel excelente.';\n} else if (percentage >= 40) {\n  performanceLevel = 'Mejorable';\n  feedback = '⚠️ Tu desempeño muestra áreas que requieren atención. Es importante identificar los obstáculos que están afectando tu satisfacción y productividad. Considera conversar con tu supervisor para crear un plan de mejora.';\n} else {\n  performanceLevel = 'Requiere Atención Urgente';\n  feedback = '🚨 Los resultados muestran un nivel de satisfacción bajo en varias áreas críticas. Es prioritario atender esta situación. Te recomendamos agendar una reunión inmediata con tu supervisor para analizar las causas y establecer un plan de acción.';\n}\n\nconst categoryScores = {};\nconst categories = [\n  { id: 1, name: 'Productividad', key: 'productividad' },\n  { id: 2, name: 'Comunicación de Equipo', key: 'comunicacion' },\n  { id: 3, name: 'Cumplimiento de Objetivos', key: 'objetivos' },\n  { id: 4, name: 'Oportunidades de Crecimiento', key: 'crecimiento' },\n  { id: 5, name: 'Balance Trabajo-Vida', key: 'balance' }\n];\n\ncategories.forEach((cat, index) => {\n  categoryScores[cat.name] = answers[index].answer;\n});\n\nconst feedbackMessage = `✅ ¡Evaluación completada!\\n\\n🎯 **RESULTADOS DE TU EVALUACIÓN**\\n\\n📊 **Métricas Generales:**\\n- Puntuación Total: ${totalScore}/25\\n- Promedio: ${averageScore.toFixed(1)}/5\\n- Porcentaje: ${percentage.toFixed(0)}%\\n- Nivel: ${performanceLevel}\\n\\n📋 **Por Categoría:**\\n${categories.map((cat, i) => `- ${cat.name}: ${answers[i].answer}/5`).join('\\n')}\\n\\n💬 **Feedback:**\\n${feedback}\\n\\n📅 Fecha: ${new Date().toLocaleDateString('es-ES')}\\n\\nGracias por completar tu evaluación. Tus resultados han sido guardados.`;\n\nreturn {\n  json: {\n    error: false,\n    userId: session.userId,\n    chatId: session.chatId,\n    username: session.username,\n    sessionId: session._id,\n    evaluationDate: new Date().toISOString(),\n    metrics: {\n      totalScore,\n      averageScore: parseFloat(averageScore.toFixed(2)),\n      percentage: parseFloat(percentage.toFixed(2)),\n      performanceLevel\n    },\n    categoryScores,\n    answers: answers.map((a, i) => ({\n      questionId: a.questionId,\n      category: categories[i].key,\n      categoryName: categories[i].name,\n      answer: a.answer,\n      timestamp: a.timestamp\n    })),\n    feedback,\n    feedbackMessage,\n    completedAt: new Date().toISOString()\n  }\n};"
+      },
+      "id": "abb67266-00b0-4ef1-9a16-770c21b68848",
+      "name": "Code Scoring Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -544
+      ],
+      "notes": "Calcula scoring y genera feedback"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "collection": "evaluation_results",
+        "fields": "={{ JSON.stringify({\n  userId: $json.userId,\n  username: $json.username,\n  sessionId: $json.sessionId,\n  evaluationDate: $json.evaluationDate,\n  metrics: $json.metrics,\n  categoryScores: $json.categoryScores,\n  answers: $json.answers,\n  feedback: $json.feedback,\n  completedAt: $json.completedAt,\n  version: 'v2-final'\n}) }}",
+        "options": {}
+      },
+      "id": "b06578ec-09ec-407b-a6bb-ed92a0a360c2",
+      "name": "MongoDB Save Results",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        -544
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Guarda resultados finales"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "collection": "evaluation_sessions",
+        "options": {}
+      },
+      "id": "171e0f27-fbf9-4be6-a272-ddf31b0a3f08",
+      "name": "MongoDB Close Session",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        1328,
+        -544
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Marca sesión como completed"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.feedbackMessage }}",
+        "additionalFields": {}
+      },
+      "id": "e7e1ae88-885d-4504-a54f-93f753a5a7a1",
+      "name": "Telegram Send Feedback",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1552,
+        -544
+      ],
+      "webhookId": "5028a186-b57f-40f5-ba37-1c530bc8d9e5",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "Envía feedback completo"
+    },
+    {
+      "parameters": {
+        "collection": "evaluation_results",
+        "options": {
+          "limit": 1,
+          "sort": "{ \"completedAt\": -1 }"
+        },
+        "query": "={{ JSON.stringify({ userId: $json.userId }) }}"
+      },
+      "id": "acdfc823-ee0a-473f-8267-32044495b0b7",
+      "name": "MongoDB Get User Results",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        -720,
+        16
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Obtiene últimos resultados del usuario"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst result = item.json.documents?.[0];\n\nif (!result) {\n  return {\n    json: {\n      chatId: $('Switch Router').item.json.chatId,\n      message: '❌ No tienes resultados previos.\\n\\nEnvía /start para realizar tu primera evaluación.'\n    }\n  };\n}\n\nconst date = new Date(result.completedAt).toLocaleDateString('es-ES', {\n  day: '2-digit',\n  month: 'long',\n  year: 'numeric',\n  hour: '2-digit',\n  minute: '2-digit'\n});\n\nconst message = `📊 **TUS ÚLTIMOS RESULTADOS**\\n\\n📅 Fecha: ${date}\\n\\n📈 **Métricas Generales:**\\n- Puntuación: ${result.metrics.totalScore}/25\\n- Promedio: ${result.metrics.averageScore}/5\\n- Porcentaje: ${result.metrics.percentage}%\\n- Nivel: ${result.metrics.performanceLevel}\\n\\n📋 **Por Categoría:**\\n${Object.entries(result.categoryScores).map(([cat, score]) => `- ${cat}: ${score}/5`).join('\\n')}\\n\\n💬 **Feedback:**\\n${result.feedback}`;\n\nreturn {\n  json: {\n    chatId: $('Switch Router').item.json.chatId,\n    userId: result.userId,\n    message: message,\n    resultData: result\n  }\n};"
+      },
+      "id": "97f507f7-807d-49a8-ab96-5b319253da1f",
+      "name": "Code Format Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        16
+      ],
+      "notes": "Formatea resultados para mostrar"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "a895c3d7-8b75-4a17-9ead-0bcfec96c51b",
+      "name": "Telegram Show Results",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -240,
+        144
+      ],
+      "webhookId": "df4d8bc0-9939-4bae-addf-690ce539d18c",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "Muestra resultados históricos"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "❓ Comandos disponibles:\\n\\n/start - Iniciar evaluación\\n/resultados - Ver tus últimos resultados\\n\\nDurante la evaluación, responde con números del 1 al 5.",
+        "additionalFields": {}
+      },
+      "id": "a24f179b-72fd-4ec2-af5d-f66ff91e0631",
+      "name": "Telegram Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -672,
+        224
+      ],
+      "webhookId": "1e8ab9b2-5378-43ed-aa2d-e04bd5590c24",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "Muestra comandos disponibles (sin sesión activa)"
+    },
+    {
+      "parameters": {
+        "collection": "evaluation_sessions",
+        "options": {
+          "limit": 1,
+          "sort": "{ \"startedAt\": -1 }"
+        },
+        "query": "={{ JSON.stringify({ userId: $json.userId, status: 'active' }) }}"
+      },
+      "id": "76a0d565-4fb4-4523-b182-da12cee343fa",
+      "name": "MongoDB Check Session For Invalid",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        -1488,
+        240
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "✅ NUEVO: Verifica si usuario tiene sesión activa para mensaje de error correcto"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $input.first().json.documents?.length || 0 }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "499ef562-f6c8-4bcc-8a29-f54c52d66fe5",
+      "name": "IF Has Active Session",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1264,
+        240
+      ],
+      "notes": "✅ NUEVO: TRUE=en evaluación (error especial), FALSE=sin evaluación (help normal)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Switch Router').item.json.chatId }}",
+        "text": "⚠️ Solo puedes responder con un número del 1 al 5 mientras estás realizando la evaluación.",
+        "additionalFields": {}
+      },
+      "id": "8ddfdc50-4a38-45e5-a9b3-0ae33eb2588d",
+      "name": "Telegram Invalid During Evaluation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1024,
+        416
+      ],
+      "webhookId": "68089c2c-02a2-44fa-b299-ff927206a2ea",
+      "credentials": {
+        "telegramApi": {
+          "id": "PQjpwEqj92Zz2zkP",
+          "name": "Telegram account"
+        }
+      },
+      "notes": "✅ NUEVO: Error específico cuando responde mal EN MEDIO de evaluación"
+    },
+    {
+      "parameters": {
+        "path": "dashboard-data",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "b787aad9-6aba-42df-95fb-3e5579073799",
+      "name": "Webhook Dashboard API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1648,
+        688
+      ],
+      "webhookId": "dashboard-api-v2-final",
+      "notes": "TRIGGER 3: API REST para dashboard React"
+    },
+    {
+      "parameters": {
+        "collection": "evaluation_results",
+        "options": {
+          "limit": 100,
+          "sort": "{ \"completedAt\": -1 }"
+        },
+        "query": "={{ JSON.stringify({}) }}"
+      },
+      "id": "cdd5a09e-cec5-4e2f-9d78-f16ae7f13e91",
+      "name": "MongoDB Get All Results",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [
+        -1424,
+        688
+      ],
+      "credentials": {
+        "mongoDb": {
+          "id": "H3ZkNo3gVsQIex2q",
+          "name": "MongoDB account"
+        }
+      },
+      "notes": "Obtiene últimos 100 resultados para dashboard"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = items.map(i => i.json.documents).flat();\n\nif (results.length === 0) {\n  return {\n    json: {\n      status: 'success',\n      timestamp: new Date().toISOString(),\n      summary: {\n        totalEvaluations: 0,\n        message: 'No hay evaluaciones completadas'\n      },\n      evaluations: []\n    }\n  };\n}\n\nconst totalEvaluations = results.length;\nconst avgTotalScore = results.reduce((sum, r) => sum + r.metrics.totalScore, 0) / totalEvaluations;\nconst avgPercentage = results.reduce((sum, r) => sum + r.metrics.percentage, 0) / totalEvaluations;\n\nconst levelDistribution = {};\nresults.forEach(r => {\n  const level = r.metrics.performanceLevel;\n  levelDistribution[level] = (levelDistribution[level] || 0) + 1;\n});\n\nconst categoryAverages = {};\nconst categoryNames = ['Productividad', 'Comunicación de Equipo', 'Cumplimiento de Objetivos', 'Oportunidades de Crecimiento', 'Balance Trabajo-Vida'];\n\ncategoryNames.forEach(cat => {\n  const scores = results.map(r => r.categoryScores[cat]).filter(s => s !== undefined);\n  categoryAverages[cat] = scores.length > 0 \n    ? (scores.reduce((sum, s) => sum + s, 0) / scores.length).toFixed(2)\n    : 0;\n});\n\nconst sortedByScore = [...results].sort((a, b) => b.metrics.totalScore - a.metrics.totalScore);\nconst topPerformers = sortedByScore.slice(0, 5).map(r => ({\n  username: r.username,\n  score: r.metrics.totalScore,\n  percentage: r.metrics.percentage,\n  level: r.metrics.performanceLevel\n}));\n\nconst bottomPerformers = sortedByScore.slice(-5).reverse().map(r => ({\n  username: r.username,\n  score: r.metrics.totalScore,\n  percentage: r.metrics.percentage,\n  level: r.metrics.performanceLevel\n}));\n\nreturn {\n  json: {\n    status: 'success',\n    timestamp: new Date().toISOString(),\n    summary: {\n      totalEvaluations,\n      averageMetrics: {\n        totalScore: parseFloat(avgTotalScore.toFixed(2)),\n        percentage: parseFloat(avgPercentage.toFixed(2))\n      },\n      levelDistribution,\n      categoryAverages,\n      topPerformers,\n      bottomPerformers\n    },\n    recentEvaluations: results.slice(0, 10).map(r => ({\n      userId: r.userId,\n      username: r.username,\n      date: r.completedAt,\n      metrics: r.metrics,\n      categoryScores: r.categoryScores\n    }))\n  }\n};"
+      },
+      "id": "ad2ec56b-5ccd-4138-958d-9d7c1e43c01b",
+      "name": "Code Dashboard Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        688
+      ],
+      "notes": "Calcula estadísticas agregadas para dashboard"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.item.json;\n\n  console.log('===== DEBUG =====');\n  console.log('userId:', input.userId, '| tipo:', typeof input.userId);\n  console.log('chatId:', input.chatId, '| tipo:', typeof input.chatId);\n\n  return $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -832,
+        -208
+      ],
+      "id": "9a48b423-5c78-43c8-8dd7-4dd2b59e0a15",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recibe los datos del nodo anterior (Code Process Answer)\nconst data = $input.item.json;\n\n// Validación rápida\nif (!data.sessionId) {\n  console.log('❌ ERROR: No se recibió sessionId en Prepare Update');\n}\n\n// Retornamos TODO lo necesario para MongoDB Save Answer\nreturn {\n  json: {\n    sessionId: data.sessionId,            // Para encontrar el documento\n    currentQuestion: data.currentQuestion, // Para saber qué pregunta se respondió\n    answer: data.answer,                  // Valor respondido\n    nextQuestion: data.nextQuestion,      // Para avanzar\n    chatId: data.chatId,                  // Para reenviar el mensaje al usuario\n    timestamp: data.timestamp || new Date().toISOString() // Marca de tiempo\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        -272
+      ],
+      "id": "328100c0-f5d6-4a0c-be62-01dda668fbcf",
+      "name": "Code Prepare Update"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Obtener datos del nodo anterior al IF\nconst prepareData = $('Code Prepare Update').item.json;\n\nreturn {\n  json: {\n    chatId: prepareData.chatId,\n    userId: prepareData.userId,\n    username: prepareData.username,\n    nextQuestionText: prepareData.nextQuestionText,\n    currentQuestion: prepareData.nextQuestion - 1,\n    nextQuestion: prepareData.nextQuestion\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        -256
+      ],
+      "id": "f4469410-96ca-4603-a810-fb8ab63117b3",
+      "name": "Code Get Question Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst session = item.json.documents?.[0];\n\n// Si no hay sesión activa → mensaje de error\nif (!session) {\n  return {\n    json: {\n      chatId: $('Switch Router').item.json.chatId,\n      userId: $('Switch Router').item.json.userId,\n      noSession: true,\n      message: '⚠️ No tienes una evaluación activa.\\n\\nEnvía /start para comenzar una nueva evaluación.'\n    }\n  };\n}\n\n// Datos base\nconst answer = $('Switch Router').item.json.answer;\nconst currentQuestion = Number(session.currentQuestion) || 1;\nconst totalQuestions = 5;\n\n// Preguntas predefinidas\nconst questions = [\n  { id: 2, text: '📝 Pregunta 2/5:\\n¿Cómo calificas la comunicación con tu equipo? (1=Muy mala, 5=Excelente)' },\n  { id: 3, text: '📝 Pregunta 3/5:\\n¿En qué medida sientes que cumples tus objetivos? (1=Muy poco, 5=Completamente)' },\n  { id: 4, text: '📝 Pregunta 4/5:\\n¿Qué tan satisfecho estás con las oportunidades de crecimiento? (1=Muy insatisfecho, 5=Muy satisfecho)' },\n  { id: 5, text: '📝 Pregunta 5/5:\\n¿Cómo evalúas tu balance trabajo-vida personal? (1=Muy malo, 5=Excelente)' }\n];\n\n// Calcular siguiente pregunta\nconst nextQuestion = currentQuestion + 1;\nconst isComplete = nextQuestion > totalQuestions;\n\nconst timestamp = new Date().toISOString();\n\nreturn {\n  json: {\n    userId: session.userId,\n    chatId: session.chatId,\n    username: session.username,\n    currentQuestion,\n    answer,\n    nextQuestion,\n    isComplete,\n    nextQuestionText: !isComplete ? questions[nextQuestion - 2].text : null,\n    sessionId: session._id,\n    timestamp\n  }\n};\n"
+      },
+      "id": "3e23907a-52b2-4baf-b421-98ef4943a2e1",
+      "name": "Code Process Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -208
+      ],
+      "notes": "✅ CORREGIDO: Retorna mensaje seguro si no hay sesión"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Get Active Users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Get Active Users": {
+      "main": [
+        [
+          {
+            "node": "Code Prepare Auto Eval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Prepare Auto Eval": {
+      "main": [
+        [
+          {
+            "node": "Code Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Router": {
+      "main": [
+        [
+          {
+            "node": "Switch Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Router": {
+      "main": [
+        [
+          {
+            "node": "Code Prepare Session Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "MongoDB Get User Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Help",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Prepare Session Data": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Create Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Create Session": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Get Session": {
+      "main": [
+        [
+          {
+            "node": "Code Process Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF No Session Check": {
+      "main": [
+        [
+          {
+            "node": "Code Prepare Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Error No Session Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Save Answer": {
+      "main": [
+        [
+          {
+            "node": "IF Evaluation Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Evaluation Complete": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Get Complete Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code Get Question Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Get Complete Session": {
+      "main": [
+        [
+          {
+            "node": "Code Scoring Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Scoring Engine": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Save Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Save Results": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Close Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Close Session": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Get User Results": {
+      "main": [
+        [
+          {
+            "node": "Code Format Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Format Results": {
+      "main": [
+        [
+          {
+            "node": "Telegram Show Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Check Session For Invalid": {
+      "main": [
+        [
+          {
+            "node": "IF Has Active Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Active Session": {
+      "main": [
+        [
+          {
+            "node": "Telegram Help",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Invalid During Evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Dashboard API": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Get All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Get All Results": {
+      "main": [
+        [
+          {
+            "node": "Code Dashboard Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Get Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Prepare Update": {
+      "main": [
+        [
+          {
+            "node": "MongoDB Save Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Get Question Data": {
+      "main": [
+        [
+          {
+            "node": "Telegram Next Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Process Answer": {
+      "main": [
+        [
+          {
+            "node": "IF No Session Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ad811014-d378-4b06-aa8c-fc54e495cc4d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "88112cc79542b40aa6f19b1583d08e53f2c8d4b047a458ac204c10e48bf309f6"
+  },
+  "id": "PtThvnUuOr4Qer27",
+  "tags": []
+}
